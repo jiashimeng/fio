@@ -147,3 +147,13 @@ struct ioengine_ops ioengine = {
 	.open_file	= fio_rbd_open,
 	.close_file	= fio_rbd_close,
 };
+
+static void fio_init fio_rbd_register(void)
+{
+	register_ioengine(&ioengine);
+}
+
+static void fio_exit fio_rbd_unregister(void)
+{
+	unregister_ioengine(&ioengine);
+}
