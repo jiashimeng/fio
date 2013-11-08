@@ -1342,9 +1342,14 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 			    .help = "Solaris native asynchronous IO",
 			  },
 #endif
-#ifdef CONFIG_WINDOWSAIO
+#ifdef config_windowsaio
 			  { .ival = "windowsaio",
-			    .help = "Windows native asynchronous IO"
+			    .help = "windows native asynchronous io"
+			  },
+#endif
+#ifdef CONFIG_RBD
+			  { .ival = "rbd",
+			    .help = "Rados Block Device asynchronous IO"
 			  },
 #endif
 			  { .ival = "mmap",

@@ -1091,6 +1091,28 @@ if compile_prog "" "" "pwritev"; then
 fi
 echo "pwritev/preadv                $pwritev"
 
+##########################################
+# check for rbd
+rbd="no"
+cat > $TMPC << EOF
+#include <rbd/librbd.h>
+
+int main(int argc, char **argv)
+{
+
+  int major, minor, extra;
+  rbd_version(&major, &minor, &extra);
+  return 0;
+}
+EOF
+if compile_prog "" "-lrbd" "rbd"; then
+  LIBS="-lrbd $LIBS"
+  rbd="yes"
+fi
+echo "Rados Block Device engine     $rbd"
+
+
+
 
 #############################################################################
 
@@ -1209,6 +1231,9 @@ if test "$rlimit_memlock" = "yes" ; then
 fi
 if test "$pwritev" = "yes" ; then
   output_sym "CONFIG_PWRITEV"
+fi
+if test "$rbd" = "yes" ; then
+  output_sym "CONFIG_RBD"
 fi
 
 echo "LIBS+=$LIBS" >> $config_host_mak
