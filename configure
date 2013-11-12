@@ -1100,13 +1100,19 @@ cat > $TMPC << EOF
 int main(int argc, char **argv)
 {
 
+  rados_t cluster;
+  rados_ioctx_t io_ctx;
+  const char pool[] = "rbd";
+
   int major, minor, extra;
   rbd_version(&major, &minor, &extra);
+
+  rados_ioctx_create(cluster, pool, &io_ctx);
   return 0;
 }
 EOF
-if compile_prog "" "-lrbd" "rbd"; then
-  LIBS="-lrbd $LIBS"
+if compile_prog "" "-lrbd -lrados" "rbd"; then
+  LIBS="-lrbd -lrados $LIBS"
   rbd="yes"
 fi
 echo "Rados Block Device engine     $rbd"
