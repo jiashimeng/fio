@@ -31,17 +31,56 @@ struct rbd_data {
 #endif
 };
 
-static int _fio_rbd_connect(struct rbd_data *rbd_data)
+struct rbd_options {
+	struct thread_data *td;
+        char *rbd_name;
+	char *pool_name;
+	char *client_name;
+};
+
+static struct fio_option options[] = {
+	{
+		.name	  = "rbdname",
+		.lname	  = "rbd engine rbdname",
+		.type	  = FIO_OPT_STR_STORE,
+		.help	  = "RBD name for RBD engine",
+		.off1	  = offsetof(struct rbd_options, rbd_name),
+		.category = FIO_OPT_C_ENGINE,
+		.group	  = FIO_OPT_G_RBD,
+	},
+	{
+		.name	  = "pool",
+		.lname	  = "rbd engine pool",
+		.type	  = FIO_OPT_STR_STORE,
+		.help	  = "Name of the pool hosting the RBD for the RBD engine",
+		.off1	  = offsetof(struct rbd_options, pool_name),
+		.category = FIO_OPT_C_ENGINE,
+		.group	  = FIO_OPT_G_RBD,
+	},
+	{
+		.name	  = "clientname",
+		.lname	  = "rbd engine clientname",
+		.type	  = FIO_OPT_STR_STORE,
+		.help	  = "Name of the ceph client to access the RBD for the RBD engine",
+		.off1	  = offsetof(struct rbd_options, client_name),
+		.category = FIO_OPT_C_ENGINE,
+		.group	  = FIO_OPT_G_RBD,
+	},
+	{
+		.name	= NULL,
+	},
+};
+
+
+static int _fio_rbd_connect(struct thread_data *td)
 {
+	struct rbd_data *rbd_data = td->io_ops->data;
+	struct rbd_options *o = td->eo;
 	int r;
-	
-	const char clientname[] = "admin";
-	const char pool[] = "rbd";
-	const char name[] = "fio_test";
 
         dprint(FD_IO, "%s\n", __func__);
 
-	r = rados_create(&(rbd_data->cluster), clientname);
+	r = rados_create(&(rbd_data->cluster), o->client_name);
 	if (r < 0) {
 		log_err("rados_create failed.\n");
 		goto failed_early;
@@ -52,7 +91,6 @@ static int _fio_rbd_connect(struct rbd_data *rbd_data)
 		log_err("rados_conf_read_file failed.\n");
 		goto failed_early;
 	}
-	
 
 	r = rados_connect(rbd_data->cluster);
 	if (r < 0) {
@@ -60,13 +98,13 @@ static int _fio_rbd_connect(struct rbd_data *rbd_data)
 		goto failed_shutdown;
 	}
 
-	r = rados_ioctx_create(rbd_data->cluster, pool, &(rbd_data->io_ctx));
+	r = rados_ioctx_create(rbd_data->cluster, o->pool_name, &(rbd_data->io_ctx));
 	if (r < 0) {
 		log_err("rados_ioctx_crate failed.\n");
 		goto failed_shutdown;
 	}
 	
-	r = rbd_open(rbd_data->io_ctx, name, &(rbd_data->image), NULL /*snap*/);
+	r = rbd_open(rbd_data->io_ctx, o->rbd_name, &(rbd_data->image), NULL /*snap*/);
 	if (r < 0) {
 		log_err("rbd_open failed.\n");
 		goto failed_open;
@@ -81,8 +119,10 @@ failed_early:
 	return 1;
 }
 
-static void _fio_rbd_disconnect(struct rbd_data *rbd_data)
+static void _fio_rbd_disconnect(struct thread_data *td)
 {
+	struct rbd_data *rbd_data = td->io_ops->data;
+
         dprint(FD_IO, "%s\n", __func__);
 
 	if (!rbd_data)
@@ -353,23 +393,17 @@ static int fio_rbd_prep(struct thread_data *td, struct io_u *io_u)
 static int fio_rbd_init(struct thread_data *td)
 {
 	int r;
-	struct rbd_data *rbd_data;
+	struct rbd_data *rbd_data = td->io_ops->data;
 
         dprint(FD_IO, "%s\n", __func__);
 
-	rbd_data = malloc(sizeof(struct rbd_data));
-	memset(rbd_data, 0, sizeof(struct rbd_data));
-	rbd_data->aio_events = malloc(td->o.iodepth * sizeof(struct io_u *));
-	memset(rbd_data->aio_events, 0, td->o.iodepth * sizeof(struct io_u *));
 
 #ifdef AIO_EVENT_LOCKING
 	pthread_mutex_init(&(rbd_data->aio_event_lock), NULL);
 	pthread_cond_init(&(rbd_data->aio_event_cond), NULL);
 #endif
 
-	td->io_ops->data = rbd_data;
-
-	r = _fio_rbd_connect(rbd_data);
+	r = _fio_rbd_connect(td);
 	if (r < 0) {
 		log_err("fio_rbd_connect failed.\n");
 		goto failed;
@@ -377,24 +411,44 @@ static int fio_rbd_init(struct thread_data *td)
 
 	return 0;
 failed:
-	_fio_rbd_disconnect(rbd_data);
+	_fio_rbd_disconnect(td);
 	return 1;
+
+}
+
+/*
+ * This is paired with the ->init() function and is called when a thread is
+ * done doing io. Should tear down anything setup by the ->init() function.
+ * Not required.
+ */
+static void fio_rbd_cleanup(struct thread_data *td)
+{
+	struct rbd_data *rbd_data = td->io_ops->data;
+        dprint(FD_IO, "%s\n", __func__);
+
+
+	if (rbd_data) {
+		_fio_rbd_disconnect(td);
+		free(rbd_data->aio_events);
+		free(rbd_data);
+	}
 
 }
 
 static int fio_rbd_setup(struct thread_data *td)
 {
 	int r = 0;
-	rbd_image_info_t info;
-
-	struct fio_file *f;
 	int major, minor, extra;
-
+	rbd_image_info_t info;
+	struct fio_file *f;
 	struct rbd_data *rbd_data;
+
+	// check if td->io_ops->data is already set?
 	rbd_data = malloc(sizeof(struct rbd_data));
 	memset(rbd_data, 0, sizeof(struct rbd_data));
 	rbd_data->aio_events = malloc(td->o.iodepth * sizeof(struct io_u *));
 	memset(rbd_data->aio_events, 0, td->o.iodepth * sizeof(struct io_u *));
+	td->io_ops->data = rbd_data;
 
 	/* librbd does not allow to run first in the main thread and later in a fork child */
 	td->o.use_thread = 1;
@@ -402,7 +456,7 @@ static int fio_rbd_setup(struct thread_data *td)
 	rbd_version(&major, &minor, &extra);
 	log_info("rbd engine: RBD version: %d.%d.%d\n", major, minor, extra);
 
-	r = _fio_rbd_connect(rbd_data);
+	r = _fio_rbd_connect(td);
 	if (r < 0) {
 		log_err("fio_rbd_connect failed.\n");
 		goto cleanup;
@@ -421,35 +475,15 @@ static int fio_rbd_setup(struct thread_data *td)
 	}
 	f = td->files[0];
 	f->real_file_size = info.size;
-//	f->filetype = FIO_TYPE_PIPE;
-//	f->filetype = FIO_TYPE_CHAR;
 
 disconnect:
-	_fio_rbd_disconnect(rbd_data);
+	_fio_rbd_disconnect(td);
+	return r;
 cleanup:
-	free(rbd_data->aio_events);
-	free(rbd_data);
+	fio_rbd_cleanup(td);
 	return r;
 }
 
-/*
- * This is paired with the ->init() function and is called when a thread is
- * done doing io. Should tear down anything setup by the ->init() function.
- * Not required.
- */
-static void fio_rbd_cleanup(struct thread_data *td)
-{
-	struct rbd_data *rbd_data = td->io_ops->data;
-        dprint(FD_IO, "%s\n", __func__);
-
-
-	if (rbd_data) {
-		_fio_rbd_disconnect(rbd_data);
-		free(rbd_data->aio_events);
-		free(rbd_data);
-	}
-
-}
 
 /*
  * Hook for opening the given file. Unless the engine has special
@@ -480,19 +514,21 @@ static int fio_rbd_close(struct thread_data *td, struct fio_file *f)
  * dlsym(..., "ioengine");
  */
 struct ioengine_ops ioengine = {
-	.name		= "rbd",
-	.version	= FIO_IOOPS_VERSION,
-	.setup		= fio_rbd_setup,
-	.init		= fio_rbd_init,
-	.prep		= fio_rbd_prep,
-	.queue		= fio_rbd_queue,
-	.cancel		= fio_rbd_cancel,
-	.getevents	= fio_rbd_getevents,
-	.event		= fio_rbd_event,
-	.cleanup	= fio_rbd_cleanup,
-	.open_file	= fio_rbd_open,
-	.close_file	= fio_rbd_close,
-//	.flags          = FIO_PIPEIO,
+	.name			= "rbd",
+	.version		= FIO_IOOPS_VERSION,
+	.setup			= fio_rbd_setup,
+	.init			= fio_rbd_init,
+	.prep			= fio_rbd_prep,
+	.queue			= fio_rbd_queue,
+	.cancel			= fio_rbd_cancel,
+	.getevents		= fio_rbd_getevents,
+	.event			= fio_rbd_event,
+	.cleanup		= fio_rbd_cleanup,
+	.open_file		= fio_rbd_open,
+	.close_file		= fio_rbd_close,
+	.options		= options,
+	.option_struct_size	= sizeof(struct rbd_options),
+//	.flags          	= FIO_PIPEIO,
 };
 
 static void fio_init fio_rbd_register(void)
