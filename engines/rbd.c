@@ -33,8 +33,9 @@ struct rbd_data {
 
 struct rbd_options {
 	struct thread_data *td;
-        char *rbd_name;
+	char *rbd_name;
 	char *pool_name;
+	char *rbd_conf;
 	char *client_name;
 };
 
@@ -54,6 +55,15 @@ static struct fio_option options[] = {
 		.type	  = FIO_OPT_STR_STORE,
 		.help	  = "Name of the pool hosting the RBD for the RBD engine",
 		.off1	  = offsetof(struct rbd_options, pool_name),
+		.category = FIO_OPT_C_ENGINE,
+		.group	  = FIO_OPT_G_RBD,
+	},
+	{
+		.name	  = "rbdconf",
+		.lname	  = "rbd engine config path",
+		.type	  = FIO_OPT_STR_STORE,
+		.help	  = "Name of the ceph config path to access the RBD for the RBD engine",
+		.off1	  = offsetof(struct rbd_options, rbd_conf),
 		.category = FIO_OPT_C_ENGINE,
 		.group	  = FIO_OPT_G_RBD,
 	},
@@ -80,13 +90,22 @@ static int _fio_rbd_connect(struct thread_data *td)
 
         dprint(FD_IO, "%s\n", __func__);
 
+	if (!o->client_name)
+		o->client_name = strdup("fio");
+
+	if (!o->rbd_conf)
+		o->rbd_conf = strdup("/etc/ceph/ceph.conf");
+
+	if (!o->pool_name || !o->rbd_name)
+		goto failed_early;
+
 	r = rados_create(&(rbd_data->cluster), o->client_name);
 	if (r < 0) {
 		log_err("rados_create failed.\n");
 		goto failed_early;
 	}
 	
-	r = rados_conf_read_file(rbd_data->cluster, NULL);
+	r = rados_conf_read_file(rbd_data->cluster, o->rbd_conf);
 	if (r < 0) {
 		log_err("rados_conf_read_file failed.\n");
 		goto failed_early;
@@ -493,9 +512,10 @@ static int fio_rbd_open(struct thread_data *td, struct fio_file *f)
 {
 	//struct rbd_data *rbd_data = td->io_ops->data;
 
-        dprint(FD_IO, "%s\n", __func__);
+	dprint(FD_IO, "%s\n", __func__);
+	f->filetype = FIO_TYPE_SERVICE;
 
-	return 0; 
+	return 0;
 }
 
 /*

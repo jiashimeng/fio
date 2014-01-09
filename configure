@@ -1115,7 +1115,7 @@ if compile_prog "" "-lrbd -lrados" "rbd"; then
   LIBS="-lrbd -lrados $LIBS"
   rbd="yes"
 fi
-echo "Rados Block Device engine     $rbd"
+echo "Rbd engine                    $rbd"
 
 
 
